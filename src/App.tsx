@@ -1,12 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { abilityText, inches, loadEdition, plus, UNIT_TYPES, unitType, weaponAbilityRule, weaponChoices } from './data';
+import { deletePhoto, downscalePhoto, setPhoto, usePhoto } from './photos';
+import { askAi, loadAiSettings, retrieve, saveAiSettings } from './ai';
+import type { AiRef, AiSettings } from './ai';
+import { abilityText, equipWeapon, inches, loadEdition, loadRules, plus, UNIT_TYPES, unitType, wargearGroups, weaponAbilityRule, weaponBaseName, weaponChoices } from './data';
 import { factionColor, groupFactions } from './factions';
 import { armyTotal, buildExport, loadPlayers, savePlayers, uid } from './roster';
-import type { Army, Edition, EditionData, Player, WUnit, WWeapon } from './types';
+import type { Army, Edition, EditionData, Player, RulesData, WUnit, WWeapon } from './types';
 import { BARLOW, card, chip, MONO, OSWALD, screenBg, sectionTitle, segBtn, stripe } from './ui';
 
-type Modal = 'newPlayer' | 'newArmy' | 'export' | null;
+type Modal = 'newPlayer' | 'newArmy' | 'export' | 'aiSettings' | null;
+
+interface AiMessage {
+  q: string;
+  a?: string;
+  refs?: AiRef[];
+  error?: string;
+}
 type FactionPickerTarget = 'filter' | 'newArmy' | null;
 
 export default function App() {
@@ -14,8 +24,19 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [players, setPlayers] = useState<Player[]>(() => loadPlayers());
-  const [tab, setTab] = useState<'data' | 'roster'>('data');
+  const [tab, setTab] = useState<'data' | 'roster' | 'rules'>('data');
   const [edition, setEdition] = useState<Edition>(11);
+
+  // rules tab
+  const [rulesData, setRulesData] = useState<Partial<Record<Edition, RulesData>>>({});
+  const [rulesError, setRulesError] = useState<string | null>(null);
+  const [rulesQuery, setRulesQuery] = useState('');
+  const [rulesMode, setRulesMode] = useState<'browse' | 'ask'>('browse');
+
+  // AI assistant
+  const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings());
+  const [aiChat, setAiChat] = useState<AiMessage[]>([]);
+  const [aiBusy, setAiBusy] = useState(false);
 
   // datasheet filters
   const [query, setQuery] = useState('');
@@ -24,7 +45,12 @@ export default function App() {
   const [viewCards, setViewCards] = useState(true);
 
   // navigation
-  const [detail, setDetail] = useState<{ unit: WUnit; edition: Edition; addArmyId: string | null } | null>(null);
+  const [detail, setDetail] = useState<{
+    unit: WUnit;
+    edition: Edition;
+    addArmyId: string | null;
+    entryRef: { armyId: string; entryId: string } | null;
+  } | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [armyId, setArmyId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -53,6 +79,14 @@ export default function App() {
       .then((d) => setDatasets((prev) => ({ ...prev, [neededEdition]: d })))
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)));
   }, [neededEdition, datasets]);
+
+  // load rules sections when the rules tab needs them
+  useEffect(() => {
+    if (tab !== 'rules' || rulesData[edition]) return;
+    loadRules(edition)
+      .then((d) => setRulesData((prev) => ({ ...prev, [edition]: d })))
+      .catch((e: unknown) => setRulesError(e instanceof Error ? e.message : String(e)));
+  }, [tab, edition, rulesData]);
 
   const data = datasets[edition] ?? null;
   const armyData = army ? datasets[army.edition] ?? null : null;
@@ -97,12 +131,24 @@ export default function App() {
     );
   }, [data, query, factionF, typeF]);
 
-  function openDetail(unit: WUnit, ed: Edition, addArmyId?: string) {
-    setDetail({ unit, edition: ed, addArmyId: addArmyId ?? null });
+  function openDetail(unit: WUnit, ed: Edition, addArmyId?: string, entryRef?: { armyId: string; entryId: string }) {
+    setDetail({ unit, edition: ed, addArmyId: addArmyId ?? null, entryRef: entryRef ?? null });
+  }
+
+  function askQuestion(q: string) {
+    const refs = retrieve(q, rulesData[edition] ?? null, datasets[edition] ?? null);
+    setAiChat((c) => [...c, { q }]);
+    setAiBusy(true);
+    askAi(aiSettings, edition, q, refs)
+      .then((a) => setAiChat((c) => c.map((m, i) => (i === c.length - 1 ? { ...m, a, refs } : m))))
+      .catch((e: unknown) =>
+        setAiChat((c) => c.map((m, i) => (i === c.length - 1 ? { ...m, error: e instanceof Error ? e.message : String(e) } : m))),
+      )
+      .finally(() => setAiBusy(false));
   }
 
   // ---------- loading / error ----------
-  if (!data && !army) {
+  if (!data && !army && tab !== 'rules') {
     return (
       <Shell>
         <LoadingScreen error={loadError} />
@@ -159,7 +205,7 @@ export default function App() {
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '2px 16px 110px' }}>
             {filtered.map((u) => (
-              <UnitRow key={u.id} u={u} viewCards={viewCards} onOpen={() => openDetail(u, edition)} />
+              <UnitRow key={u.id} u={u} ed={edition} viewCards={viewCards} onOpen={() => openDetail(u, edition)} />
             ))}
             {filtered.length === 0 && (
               <div style={{ textAlign: 'center', padding: '48px 20px', color: '#6f6759', fontFamily: MONO, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' }}>
@@ -267,7 +313,7 @@ export default function App() {
           onUpdate={(fn) => updateArmy(army.id, fn)}
           onOpenPicker={() => { setPickerOpen(true); setPickerQuery(''); }}
           onOpenExport={() => { setModal('export'); setCopied(false); }}
-          onViewSheet={(u) => openDetail(u, army.edition)}
+          onViewSheet={(u, entryId) => openDetail(u, army.edition, undefined, { armyId: army.id, entryId })}
           onDuplicate={() => {
             const copy: Army = { ...army, id: uid('a'), name: army.name + ' (copy)', entries: army.entries.map((e) => ({ ...e, id: uid('e') })) };
             save((prev) => prev.map((p) => (p.id === player.id ? { ...p, armies: [...p.armies, copy] } : p)));
@@ -283,8 +329,26 @@ export default function App() {
         />
       )}
 
+      {/* ============ RULES TAB ============ */}
+      {tab === 'rules' && (
+        <RulesScreen
+          rules={rulesData[edition] ?? null}
+          error={rulesError}
+          edition={edition}
+          onEdition={setEdition}
+          query={rulesQuery}
+          setQuery={setRulesQuery}
+          mode={rulesMode}
+          setMode={setRulesMode}
+          chat={aiChat}
+          busy={aiBusy}
+          onAsk={askQuestion}
+          onOpenSettings={() => setModal('aiSettings')}
+        />
+      )}
+
       {/* ============ TAB BAR ============ */}
-      <TabBar tab={tab} onData={() => setTab('data')} onRoster={() => setTab('roster')} />
+      <TabBar tab={tab} onSelect={setTab} />
 
       {/* ============ UNIT PICKER ============ */}
       {pickerOpen && army && armyData && (
@@ -301,18 +365,37 @@ export default function App() {
       )}
 
       {/* ============ UNIT DETAIL ============ */}
-      {detail && datasets[detail.edition] && (
-        <UnitDetail
-          u={detail.unit}
-          data={datasets[detail.edition]!}
-          showAdd={!!detail.addArmyId}
-          onAdd={(sizeIdx) => {
-            if (detail.addArmyId) addEntry(detail.addArmyId, detail.unit.id, sizeIdx);
-            setDetail(null);
-          }}
-          onClose={() => setDetail(null)}
-        />
-      )}
+      {detail && datasets[detail.edition] && (() => {
+        const ref = detail.entryRef;
+        const entry = ref
+          ? players.flatMap((p) => p.armies).find((a) => a.id === ref.armyId)?.entries.find((e) => e.id === ref.entryId) ?? null
+          : null;
+        const weaponSel = ref && entry
+          ? {
+              selected: entry.weapons ?? [],
+              onToggle: (name: string) =>
+                updateArmy(ref.armyId, (a) => ({
+                  ...a,
+                  entries: a.entries.map((x) =>
+                    x.id === ref.entryId ? { ...x, weapons: equipWeapon(detail.unit, x.weapons ?? [], name) } : x,
+                  ),
+                })),
+            }
+          : undefined;
+        return (
+          <UnitDetail
+            u={detail.unit}
+            data={datasets[detail.edition]!}
+            showAdd={!!detail.addArmyId}
+            weaponSel={weaponSel}
+            onAdd={(sizeIdx) => {
+              if (detail.addArmyId) addEntry(detail.addArmyId, detail.unit.id, sizeIdx);
+              setDetail(null);
+            }}
+            onClose={() => setDetail(null)}
+          />
+        );
+      })()}
 
       {/* ============ FACTION PICKER ============ */}
       {factionPicker && (
@@ -432,6 +515,50 @@ export default function App() {
         </ModalCenter>
       )}
 
+      {/* ============ MODAL: AI SETTINGS ============ */}
+      {modal === 'aiSettings' && (
+        <ModalCenter scroll>
+          <div style={{ fontFamily: OSWALD, fontSize: 16, fontWeight: 600, letterSpacing: 1, textTransform: 'uppercase', color: '#e6dfd0' }}>AI Assistant Settings</div>
+          <div style={{ fontFamily: BARLOW, fontSize: 12, color: '#9c9484', lineHeight: 1.5, marginTop: 8 }}>
+            Uses the NVIDIA Build API (build.nvidia.com). It blocks direct browser calls, so requests go through a proxy:
+            the dev server proxies automatically; otherwise run <b style={{ color: '#c4bba8' }}>npm run ai-proxy</b>.
+            The key is stored only on this device.
+          </div>
+          <div style={modalLabel}>API key (nvapi-…)</div>
+          <input
+            value={aiSettings.apiKey}
+            onChange={(e) => setAiSettings({ ...aiSettings, apiKey: e.target.value })}
+            placeholder="Leave empty if the proxy holds the key"
+            type="password"
+            style={{ ...modalInput, fontFamily: MONO, fontSize: 12 }}
+          />
+          <div style={modalLabel}>Model</div>
+          <input
+            value={aiSettings.model}
+            onChange={(e) => setAiSettings({ ...aiSettings, model: e.target.value })}
+            style={{ ...modalInput, fontFamily: MONO, fontSize: 12 }}
+          />
+          <div style={modalLabel}>Endpoint</div>
+          <input
+            value={aiSettings.endpoint}
+            onChange={(e) => setAiSettings({ ...aiSettings, endpoint: e.target.value })}
+            style={{ ...modalInput, fontFamily: MONO, fontSize: 12 }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+            <button onClick={() => setModal(null)} style={cancelBtn}>Close</button>
+            <button
+              onClick={() => {
+                saveAiSettings(aiSettings);
+                setModal(null);
+              }}
+              style={primaryBtn}
+            >
+              Save
+            </button>
+          </div>
+        </ModalCenter>
+      )}
+
       {/* ============ MODAL: EXPORT ============ */}
       {modal === 'export' && army && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 40, background: 'rgba(6,5,4,0.7)', display: 'flex', alignItems: 'flex-end' }}>
@@ -507,14 +634,30 @@ function statCells(u: WUnit) {
   return STAT_KEYS.map((k, i) => ({ k, v: vals[i] ?? '—' }));
 }
 
-function UnitRow({ u, viewCards, onOpen }: { u: WUnit; viewCards: boolean; onOpen: () => void }) {
+/** Small thumbnail of the player's own mini photo; renders nothing when unset. */
+function UnitThumb({ ed, unitId, size = 40 }: { ed: Edition; unitId: string; size?: number }) {
+  const [photo] = usePhoto(ed, unitId);
+  if (!photo) return null;
+  return (
+    <img
+      src={photo}
+      alt=""
+      style={{ width: size, height: size, borderRadius: 8, objectFit: 'cover', flexShrink: 0, border: '1px solid #352e27', alignSelf: 'center' }}
+    />
+  );
+}
+
+function UnitRow({ u, ed, viewCards, onOpen }: { u: WUnit; ed: Edition; viewCards: boolean; onOpen: () => void }) {
   return (
     <button
       onClick={onOpen}
       style={{ display: 'flex', flexDirection: 'column', width: '100%', textAlign: 'left', background: '#1b1815', border: '1px solid #2b2620', borderRadius: 12, padding: 0, marginBottom: 8, cursor: 'pointer', overflow: 'hidden', color: '#ddd6c8', fontFamily: BARLOW }}
     >
-      <div style={{ display: 'flex', alignItems: 'stretch', width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'stretch', width: '100%', gap: 0 }}>
         <div style={stripe(factionColor(u.faction))} />
+        <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 10 }}>
+          <UnitThumb ed={ed} unitId={u.id} />
+        </div>
         <div style={{ flex: 1, minWidth: 0, padding: '12px 0 12px 12px' }}>
           <div style={{ fontFamily: OSWALD, fontSize: 15, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase', color: '#e6dfd0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {u.name}
@@ -549,7 +692,12 @@ function UnitRow({ u, viewCards, onOpen }: { u: WUnit; viewCards: boolean; onOpe
 
 // ================= unit detail =================
 
-function WeaponTable({ title, weapons, skillHeader, data }: { title: string; weapons: WWeapon[]; skillHeader: 'BS' | 'WS'; data: EditionData }) {
+interface WeaponSel {
+  selected: string[];
+  onToggle: (name: string) => void;
+}
+
+function WeaponTable({ title, weapons, skillHeader, data, sel }: { title: string; weapons: WWeapon[]; skillHeader: 'BS' | 'WS'; data: EditionData; sel?: WeaponSel }) {
   const [openAbil, setOpenAbil] = useState<number | null>(null);
   const grid = 'minmax(0,1fr) 40px 26px 30px 26px 28px 30px';
   const head: CSSProperties = { fontFamily: MONO, fontSize: 9, color: '#7d7566', textAlign: 'center' };
@@ -570,10 +718,27 @@ function WeaponTable({ title, weapons, skillHeader, data }: { title: string; wea
         {weapons.length === 0 && (
           <div style={{ fontFamily: MONO, fontSize: 10, color: '#6f6759', padding: '10px 0 2px', letterSpacing: 0.5, textTransform: 'uppercase' }}>None</div>
         )}
-        {weapons.map((w, i) => (
+        {weapons.map((w, i) => {
+          const base = weaponBaseName(w.name);
+          const isSel = sel ? sel.selected.includes(base) : false;
+          return (
           <div key={i} style={{ padding: '8px 0 0' }}>
             <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 4, alignItems: 'baseline' }}>
-              <span style={{ fontFamily: BARLOW, fontSize: 12.5, fontWeight: 600, color: '#ddd6c8' }}>{w.name}</span>
+              {sel ? (
+                <button
+                  onClick={() => sel.onToggle(base)}
+                  style={{
+                    background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: 'pointer',
+                    fontFamily: BARLOW, fontSize: 12.5, fontWeight: 600,
+                    color: isSel ? '#e5a89a' : '#ddd6c8',
+                  }}
+                >
+                  <span style={{ color: isSel ? '#cf5240' : '#6f6759', marginRight: 5 }}>{isSel ? '◆' : '◇'}</span>
+                  {w.name}
+                </button>
+              ) : (
+                <span style={{ fontFamily: BARLOW, fontSize: 12.5, fontWeight: 600, color: '#ddd6c8' }}>{w.name}</span>
+              )}
               <span style={cell}>{inches(w.range)}</span>
               <span style={cell}>{w.A}</span>
               <span style={cell}>{plus(w.skill)}</span>
@@ -605,13 +770,25 @@ function WeaponTable({ title, weapons, skillHeader, data }: { title: string; wea
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </>
   );
 }
 
-function UnitDetail({ u, data, showAdd, onAdd, onClose }: { u: WUnit; data: EditionData; showAdd: boolean; onAdd: (sizeIdx: number) => void; onClose: () => void }) {
+function UnitDetail({ u, data, showAdd, weaponSel, onAdd, onClose }: {
+  u: WUnit;
+  data: EditionData;
+  showAdd: boolean;
+  weaponSel?: WeaponSel;
+  onAdd: (sizeIdx: number) => void;
+  onClose: () => void;
+}) {
+  const [abilitiesOpen, setAbilitiesOpen] = useState(false);
+  const ed = data.edition as Edition;
+  const [photo, refreshPhoto] = usePhoto(ed, u.id);
+  const fileRef = useRef<HTMLInputElement>(null);
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 30, display: 'flex', flexDirection: 'column', background: screenBg }}>
       <div style={{ padding: '58px 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -625,8 +802,45 @@ function UnitDetail({ u, data, showAdd, onAdd, onClose }: { u: WUnit; data: Edit
           <div style={{ height: 5, background: `linear-gradient(90deg, ${factionColor(u.faction)}, #1b1815)` }} />
           <div style={{ padding: 14 }}>
             <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-              <div style={{ width: 84, height: 84, flexShrink: 0, borderRadius: 10, background: '#14110f', border: '1px dashed #352e27', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: MONO, fontSize: 8.5, letterSpacing: 0.5, color: '#5c5548', textTransform: 'uppercase', textAlign: 'center' }}>
-                mini photo
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(ev) => {
+                  const f = ev.target.files?.[0];
+                  ev.target.value = '';
+                  if (!f) return;
+                  void downscalePhoto(f)
+                    .then((d) => setPhoto(ed, u.id, d))
+                    .then(refreshPhoto)
+                    .catch(() => {});
+                }}
+              />
+              <div style={{ position: 'relative', width: 84, flexShrink: 0 }}>
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  style={{
+                    width: 84, height: 84, borderRadius: 10, padding: 0, overflow: 'hidden', cursor: 'pointer',
+                    background: '#14110f', border: photo ? '1px solid #352e27' : '1px dashed #352e27',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontFamily: MONO, fontSize: 8.5, letterSpacing: 0.5, color: '#5c5548', textTransform: 'uppercase', textAlign: 'center',
+                  }}
+                >
+                  {photo ? (
+                    <img src={photo} alt={u.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : (
+                    '+ add mini photo'
+                  )}
+                </button>
+                {photo && (
+                  <button
+                    onClick={() => { void deletePhoto(ed, u.id).then(refreshPhoto); }}
+                    style={{ position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: 999, background: '#2a1210', border: '1px solid #6e2018', color: '#e0937f', fontSize: 11, lineHeight: 1, cursor: 'pointer', padding: 0 }}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: OSWALD, fontSize: 21, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: '#ece5d5', lineHeight: 1.15 }}>{u.name}</div>
@@ -654,8 +868,13 @@ function UnitDetail({ u, data, showAdd, onAdd, onClose }: { u: WUnit; data: Edit
           </div>
         </div>
 
-        <WeaponTable title="Ranged Weapons" weapons={u.weapons.filter((w) => w.type === 'R')} skillHeader="BS" data={data} />
-        <WeaponTable title="Melee Weapons" weapons={u.weapons.filter((w) => w.type === 'M')} skillHeader="WS" data={data} />
+        {weaponSel && (
+          <div style={{ margin: '14px 2px 0', padding: '9px 12px', background: '#1f1b17', border: '1px solid #352e27', borderRadius: 8, fontFamily: MONO, fontSize: 9.5, letterSpacing: 0.5, color: '#a89f8d', textTransform: 'uppercase', lineHeight: 1.6 }}>
+            Tap weapons to equip this roster entry · picking a replacement swaps its default automatically
+          </div>
+        )}
+        <WeaponTable title="Ranged Weapons" weapons={u.weapons.filter((w) => w.type === 'R')} skillHeader="BS" data={data} sel={weaponSel} />
+        <WeaponTable title="Melee Weapons" weapons={u.weapons.filter((w) => w.type === 'M')} skillHeader="WS" data={data} sel={weaponSel} />
 
         {u.options.length > 0 && (
           <>
@@ -671,7 +890,16 @@ function UnitDetail({ u, data, showAdd, onAdd, onClose }: { u: WUnit; data: Edit
           </>
         )}
 
-        <div style={sectionTitle}>Abilities</div>
+        <button
+          onClick={() => setAbilitiesOpen(!abilitiesOpen)}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+        >
+          <span style={{ ...sectionTitle, margin: '18px 2px 8px' }}>
+            Abilities ({u.abilities.length + (u.damagedText ? 1 : 0)})
+          </span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: '#7d7566', margin: '18px 2px 8px' }}>{abilitiesOpen ? '▴' : '▾'}</span>
+        </button>
+        {abilitiesOpen && (
         <div style={{ ...card, padding: '4px 14px' }}>
           {u.abilities.map((ab, i) => {
             const text = abilityText(data, ab);
@@ -696,6 +924,7 @@ function UnitDetail({ u, data, showAdd, onAdd, onClose }: { u: WUnit; data: Edit
             </div>
           )}
         </div>
+        )}
 
         {(u.comp.length > 0 || u.loadout || u.transport) && (
           <>
@@ -765,7 +994,7 @@ function ArmyDetail(props: {
   onUpdate: (fn: (a: Army) => Army) => void;
   onOpenPicker: () => void;
   onOpenExport: () => void;
-  onViewSheet: (u: WUnit) => void;
+  onViewSheet: (u: WUnit, entryId: string) => void;
   onDuplicate: () => void;
   onDelete: () => void;
 }) {
@@ -845,12 +1074,22 @@ function ArmyDetail(props: {
           const expanded = props.expandedEntry === e.id;
           const choices = weaponChoices(u);
           const selWeapons = e.weapons ?? [];
+          const groups = wargearGroups(u);
+          const groupedNames = new Set(groups.flatMap((g) => g.choices));
+          const otherChoices = choices.filter((n) => !groupedNames.has(n));
+          const looseOptions = u.options.filter((o) => !groups.some((g) => g.text === o));
+          const setEntryWeapons = (fn: (weapons: string[]) => string[]) =>
+            props.onUpdate((a) => ({
+              ...a,
+              entries: a.entries.map((x) => (x.id === e.id ? { ...x, weapons: fn(x.weapons ?? []) } : x)),
+            }));
           return (
             <div key={e.id} style={{ ...card, marginBottom: 8, overflow: 'hidden' }}>
               <button
                 onClick={() => props.onToggleEntry(e.id)}
                 style={{ display: 'flex', alignItems: 'center', width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '12px 14px', minHeight: 56, cursor: 'pointer', gap: 10, color: '#ddd6c8', fontFamily: BARLOW }}
               >
+                <UnitThumb ed={army.edition} unitId={u.id} size={36} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontFamily: OSWALD, fontSize: 14, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', color: '#e6dfd0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {e.qty > 1 ? `${e.qty}× ` : ''}{u.name}
@@ -883,35 +1122,59 @@ function ArmyDetail(props: {
                     </div>
                   </div>
 
-                  {choices.length > 1 && (
+                  {(groups.length > 0 || otherChoices.length > 1) && (
                     <>
                       <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1.2, color: '#7d7566', textTransform: 'uppercase', margin: '12px 2px 6px' }}>Weapons</div>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {choices.map((wName) => {
-                          const sel = selWeapons.includes(wName);
-                          return (
-                            <button
-                              key={wName}
-                              style={chip(sel, { padding: '7px 10px', minHeight: 32, textTransform: 'none', letterSpacing: 0.3 })}
-                              onClick={() =>
-                                props.onUpdate((a) => ({
-                                  ...a,
-                                  entries: a.entries.map((x) =>
-                                    x.id === e.id
-                                      ? { ...x, weapons: sel ? (x.weapons ?? []).filter((n) => n !== wName) : [...(x.weapons ?? []), wName] }
-                                      : x,
-                                  ),
-                                }))
-                              }
-                            >
-                              {wName}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {u.options.length > 0 && (
+                      {groups.map((g, gi) => {
+                        const groupSel = g.choices.filter((c) => selWeapons.includes(c));
+                        const defaultActive = groupSel.length === 0;
+                        return (
+                          <div key={gi} style={{ background: '#16130f', border: '1px solid #26211c', borderRadius: 10, padding: '10px 10px 8px', marginBottom: 8 }}>
+                            <div style={{ fontFamily: BARLOW, fontSize: 11, color: '#7d7566', lineHeight: 1.45, whiteSpace: 'pre-wrap', marginBottom: 8 }}>{g.text}</div>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {g.choices.map((c, ci) => {
+                                const isDefault = ci === 0;
+                                const active = selWeapons.includes(c) || (isDefault && defaultActive);
+                                return (
+                                  <button
+                                    key={c}
+                                    style={chip(active, { padding: '7px 10px', minHeight: 32, textTransform: 'none', letterSpacing: 0.3 })}
+                                    onClick={() => {
+                                      if (isDefault && !selWeapons.includes(c)) {
+                                        setEntryWeapons((w) => w.filter((n) => !g.choices.includes(n)));
+                                      } else {
+                                        setEntryWeapons((w) => equipWeapon(u, w, c));
+                                      }
+                                    }}
+                                  >
+                                    {c}
+                                    {isDefault && <span style={{ color: active ? '#c98577' : '#6b6457', marginLeft: 5, fontSize: 9 }}>DEFAULT</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {otherChoices.length > 0 && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {otherChoices.map((wName) => {
+                            const sel = selWeapons.includes(wName);
+                            return (
+                              <button
+                                key={wName}
+                                style={chip(sel, { padding: '7px 10px', minHeight: 32, textTransform: 'none', letterSpacing: 0.3 })}
+                                onClick={() => setEntryWeapons((w) => equipWeapon(u, w, wName))}
+                              >
+                                {wName}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {looseOptions.length > 0 && (
                         <div style={{ fontFamily: BARLOW, fontSize: 11.5, color: '#7d7566', lineHeight: 1.5, marginTop: 8 }}>
-                          {u.options.map((o, i) => (
+                          {looseOptions.map((o, i) => (
                             <div key={i} style={{ whiteSpace: 'pre-wrap' }}>◆ {o}</div>
                           ))}
                         </div>
@@ -927,7 +1190,7 @@ function ArmyDetail(props: {
                     style={{ width: '100%', marginTop: 10, padding: '10px 12px', background: '#14110f', border: '1px solid #2b2620', borderRadius: 8, color: '#cfc7b6', fontFamily: BARLOW, fontSize: 13, resize: 'vertical', lineHeight: 1.4 }}
                   />
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-                    <button onClick={() => props.onViewSheet(u)} style={{ background: 'none', border: 'none', padding: '8px 0', color: '#97907f', fontFamily: MONO, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', cursor: 'pointer' }}>
+                    <button onClick={() => props.onViewSheet(u, e.id)} style={{ background: 'none', border: 'none', padding: '8px 0', color: '#97907f', fontFamily: MONO, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', cursor: 'pointer' }}>
                       View datasheet ›
                     </button>
                     <button onClick={() => props.onUpdate((a) => ({ ...a, entries: a.entries.filter((x) => x.id !== e.id) }))} style={{ background: 'none', border: 'none', padding: '8px 0', color: '#b5493c', fontFamily: MONO, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', cursor: 'pointer' }}>
@@ -1030,31 +1293,282 @@ function UnitPicker(props: {
 
 // ================= tab bar =================
 
-function TabBar({ tab, onData, onRoster }: { tab: 'data' | 'roster'; onData: () => void; onRoster: () => void }) {
-  const dataColor = tab === 'data' ? '#cf5240' : '#6b6457';
-  const rosterColor = tab === 'roster' ? '#cf5240' : '#6b6457';
+type Tab = 'data' | 'roster' | 'rules';
+
+function TabBar({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }) {
+  const color = (t: Tab) => (tab === t ? '#cf5240' : '#6b6457');
   const lbl = (active: boolean): CSSProperties => ({
     fontFamily: MONO, fontSize: 9, letterSpacing: 1.2, textTransform: 'uppercase', color: active ? '#e5a89a' : '#6b6457',
   });
   const btn: CSSProperties = { flex: 1, minHeight: 48, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, paddingTop: 6 };
   return (
     <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 20, display: 'flex', padding: '8px 24px 30px', background: 'rgba(14,12,10,0.92)', backdropFilter: 'blur(14px)', borderTop: '1px solid #26211c' }}>
-      <button onClick={onData} style={btn}>
+      <button onClick={() => onSelect('data')} style={btn}>
         <svg width="21" height="21" viewBox="0 0 21 21" fill="none">
-          <rect x="3" y="2.5" width="15" height="16" rx="2" stroke={dataColor} strokeWidth="1.8" />
-          <line x1="6.5" y1="7" x2="14.5" y2="7" stroke={dataColor} strokeWidth="1.8" />
-          <line x1="6.5" y1="10.5" x2="14.5" y2="10.5" stroke={dataColor} strokeWidth="1.8" />
-          <line x1="6.5" y1="14" x2="11" y2="14" stroke={dataColor} strokeWidth="1.8" />
+          <rect x="3" y="2.5" width="15" height="16" rx="2" stroke={color('data')} strokeWidth="1.8" />
+          <line x1="6.5" y1="7" x2="14.5" y2="7" stroke={color('data')} strokeWidth="1.8" />
+          <line x1="6.5" y1="10.5" x2="14.5" y2="10.5" stroke={color('data')} strokeWidth="1.8" />
+          <line x1="6.5" y1="14" x2="11" y2="14" stroke={color('data')} strokeWidth="1.8" />
         </svg>
         <span style={lbl(tab === 'data')}>Datasheets</span>
       </button>
-      <button onClick={onRoster} style={btn}>
+      <button onClick={() => onSelect('roster')} style={btn}>
         <svg width="21" height="21" viewBox="0 0 21 21" fill="none">
-          <circle cx="10.5" cy="6.5" r="3.5" stroke={rosterColor} strokeWidth="1.8" />
-          <path d="M3.5 18.5c0-3.6 3.1-6 7-6s7 2.4 7 6" stroke={rosterColor} strokeWidth="1.8" />
+          <circle cx="10.5" cy="6.5" r="3.5" stroke={color('roster')} strokeWidth="1.8" />
+          <path d="M3.5 18.5c0-3.6 3.1-6 7-6s7 2.4 7 6" stroke={color('roster')} strokeWidth="1.8" />
         </svg>
         <span style={lbl(tab === 'roster')}>Army Builder</span>
       </button>
+      <button onClick={() => onSelect('rules')} style={btn}>
+        <svg width="21" height="21" viewBox="0 0 21 21" fill="none">
+          <path d="M10.5 4.5c-1.6-1.3-3.8-1.7-6.5-1.5v13.5c2.7-.2 4.9.2 6.5 1.5 1.6-1.3 3.8-1.7 6.5-1.5V3c-2.7-.2-4.9.2-6.5 1.5z" stroke={color('rules')} strokeWidth="1.8" strokeLinejoin="round" />
+          <line x1="10.5" y1="5" x2="10.5" y2="17.5" stroke={color('rules')} strokeWidth="1.8" />
+        </svg>
+        <span style={lbl(tab === 'rules')}>Rules</span>
+      </button>
+    </div>
+  );
+}
+
+// ================= rules screen =================
+
+function Highlight({ text, q }: { text: string; q: string }) {
+  if (!q) return <>{text}</>;
+  const parts: ReactNode[] = [];
+  const low = text.toLowerCase();
+  const ql = q.toLowerCase();
+  let i = 0;
+  for (;;) {
+    const idx = low.indexOf(ql, i);
+    if (idx === -1) { parts.push(text.slice(i)); break; }
+    parts.push(text.slice(i, idx));
+    parts.push(
+      <span key={idx} style={{ color: '#f0c07a', background: '#3a2712', borderRadius: 3, padding: '0 1px' }}>
+        {text.slice(idx, idx + q.length)}
+      </span>,
+    );
+    i = idx + q.length;
+  }
+  return <>{parts}</>;
+}
+
+/** First matched region of a section body, trimmed to a readable snippet. */
+function matchSnippet(text: string, q: string): string {
+  const idx = text.toLowerCase().indexOf(q.toLowerCase());
+  if (idx === -1) return text.slice(0, 160) + (text.length > 160 ? '…' : '');
+  const start = Math.max(0, idx - 70);
+  const end = Math.min(text.length, idx + q.length + 90);
+  return (start > 0 ? '…' : '') + text.slice(start, end).replace(/\n+/g, ' ') + (end < text.length ? '…' : '');
+}
+
+function RulesScreen({ rules, error, edition, onEdition, query, setQuery, mode, setMode, chat, busy, onAsk, onOpenSettings }: {
+  rules: RulesData | null;
+  error: string | null;
+  edition: Edition;
+  onEdition: (ed: Edition) => void;
+  query: string;
+  setQuery: (q: string) => void;
+  mode: 'browse' | 'ask';
+  setMode: (m: 'browse' | 'ask') => void;
+  chat: AiMessage[];
+  busy: boolean;
+  onAsk: (q: string) => void;
+  onOpenSettings: () => void;
+}) {
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+  const [draft, setDraft] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (mode === 'ask') chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chat, busy, mode]);
+  const q = query.trim();
+
+  const visible = useMemo(() => {
+    const sections = rules?.sections ?? [];
+    const all = sections.map((s, i) => ({ s, i }));
+    if (!q) return all;
+    const ql = q.toLowerCase();
+    return all.filter(({ s }) => s.title.toLowerCase().includes(ql) || s.text.toLowerCase().includes(ql));
+  }, [rules, q]);
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '68px 16px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontFamily: OSWALD, fontSize: 24, fontWeight: 700, letterSpacing: 1.5, textTransform: 'uppercase', color: '#e6dfd0' }}>
+              Rules
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: '#7d7566', textTransform: 'uppercase', marginTop: 2 }}>
+              Core rules · {edition}th edition
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 0, border: '1px solid #352e27', borderRadius: 8, overflow: 'hidden' }}>
+            {([10, 11] as Edition[]).map((ed) => (
+              <button key={ed} style={segBtn(edition === ed)} onClick={() => { onEdition(ed); setOpenIdx(null); }}>
+                {ed}TH
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+          <button style={chip(mode === 'browse')} onClick={() => setMode('browse')}>Browse</button>
+          <button style={chip(mode === 'ask')} onClick={() => setMode('ask')}>✦ Ask AI</button>
+          {mode === 'ask' && (
+            <button onClick={onOpenSettings} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#7d7566', fontFamily: MONO, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', cursor: 'pointer', padding: '8px 2px' }}>
+              ⚙ Settings
+            </button>
+          )}
+        </div>
+        {mode === 'browse' && (
+          <>
+            <input
+              value={query}
+              onChange={(e) => { setQuery(e.target.value); setOpenIdx(null); }}
+              placeholder="Search the rules… (e.g. charge, cover, deep strike)"
+              style={{ ...searchInput, marginTop: 10 }}
+            />
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: '#7d7566', textTransform: 'uppercase', margin: '10px 2px 8px' }}>
+              {rules ? `${visible.length} section${visible.length === 1 ? '' : 's'}${q ? ' match' : ''}` : ''}
+            </div>
+          </>
+        )}
+        {mode === 'ask' && (
+          <form
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              const question = draft.trim();
+              if (!question || busy) return;
+              setDraft('');
+              onAsk(question);
+            }}
+            style={{ display: 'flex', gap: 8, margin: '10px 0 8px' }}
+          >
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Ask anything mid-game… (e.g. can I fall back and shoot?)"
+              style={{ ...searchInput, marginTop: 0, flex: 1 }}
+            />
+            <button type="submit" disabled={busy || !draft.trim()} style={{ ...primaryBtn, flex: 'none', minWidth: 64, opacity: busy || !draft.trim() ? 0.5 : 1 }}>
+              Ask
+            </button>
+          </form>
+        )}
+      </div>
+      {mode === 'ask' && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '2px 16px 110px' }}>
+          {chat.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '40px 24px', fontFamily: BARLOW, fontSize: 13, color: '#6f6759', lineHeight: 1.7 }}>
+              Ask rules questions during the match — the assistant reads the {edition}th-edition rules database
+              (core rules, glossaries and datasheets) and cites its sources so you can verify every answer.
+            </div>
+          )}
+          {chat.map((m, i) => (
+            <div key={i} style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ maxWidth: '85%', background: '#301511', border: '1px solid #8c352c', borderRadius: '12px 12px 4px 12px', padding: '9px 12px', fontFamily: BARLOW, fontSize: 13.5, color: '#e5c1b8', lineHeight: 1.45 }}>
+                  {m.q}
+                </div>
+              </div>
+              {(m.a || m.error || (i === chat.length - 1 && busy)) && (
+                <div style={{ marginTop: 8, ...card, padding: '11px 13px' }}>
+                  {m.error ? (
+                    <div style={{ fontFamily: BARLOW, fontSize: 12.5, color: '#e0937f', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{m.error}</div>
+                  ) : m.a ? (
+                    <>
+                      <div style={{ fontFamily: BARLOW, fontSize: 13.5, color: '#cfc7b6', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{m.a}</div>
+                      {m.refs && m.refs.length > 0 && (
+                        <div style={{ marginTop: 10, borderTop: '1px solid #26211c', paddingTop: 8 }}>
+                          <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 1.2, color: '#7d7566', textTransform: 'uppercase', marginBottom: 6 }}>References</div>
+                          {m.refs.map((r) => (
+                            <RefCard key={r.id} r={r} />
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1, color: '#7d7566', textTransform: 'uppercase' }}>Consulting the archives…</div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+          <div ref={chatEndRef} />
+        </div>
+      )}
+      {mode === 'browse' && (
+      <div style={{ flex: 1, overflowY: 'auto', padding: '2px 16px 110px' }}>
+        {!rules && (
+          <div style={{ textAlign: 'center', padding: '48px 20px', fontFamily: MONO, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', color: error ? '#e0937f' : '#6f6759' }}>
+            {error ? `Could not load the rules: ${error}` : 'Loading rules…'}
+          </div>
+        )}
+        {rules && visible.map(({ s, i }) => {
+          const open = openIdx === i;
+          return (
+            <div key={i} style={{ ...card, marginBottom: 8, overflow: 'hidden', marginLeft: s.level === 3 && !q ? 14 : 0 }}>
+              <button
+                onClick={() => setOpenIdx(open ? null : i)}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '12px 14px', minHeight: 48, cursor: 'pointer' }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: OSWALD, fontSize: s.level === 2 ? 14.5 : 13, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase', color: s.level === 2 ? '#e6dfd0' : '#c4bba8' }}>
+                    <Highlight text={s.title} q={q} />
+                  </div>
+                  {s.src !== 'Core Rules' && (
+                    <div style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: 1, color: '#8a5a4a', textTransform: 'uppercase', marginTop: 3 }}>{s.src}</div>
+                  )}
+                  {q && !open && (
+                    <div style={{ fontFamily: BARLOW, fontSize: 12, color: '#9c9484', lineHeight: 1.45, marginTop: 4 }}>
+                      <Highlight text={matchSnippet(s.text, q)} q={q} />
+                    </div>
+                  )}
+                </div>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: '#7d7566', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
+              </button>
+              {open && (
+                <div style={{ padding: '0 14px 14px', borderTop: '1px solid #26211c' }}>
+                  <div style={{ fontFamily: BARLOW, fontSize: 13, color: '#b3ab9a', lineHeight: 1.55, marginTop: 10, whiteSpace: 'pre-wrap' }}>
+                    <Highlight text={s.text} q={q} />
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {rules && visible.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '48px 20px', color: '#6f6759', fontFamily: MONO, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' }}>
+            No rules match “{q}”
+          </div>
+        )}
+      </div>
+      )}
+    </div>
+  );
+}
+
+/** One cited context chunk under an AI answer; expands to the full source text. */
+function RefCard({ r }: { r: AiRef }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ background: '#16130f', border: '1px solid #26211c', borderRadius: 8, marginBottom: 4, overflow: 'hidden' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '8px 10px', cursor: 'pointer' }}
+      >
+        <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 600, color: '#d8a05f', flexShrink: 0 }}>[{r.id}]</span>
+        <span style={{ flex: 1, minWidth: 0, fontFamily: BARLOW, fontSize: 12, fontWeight: 600, color: '#b3ab9a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {r.title}
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: 0.8, color: '#8a5a4a', textTransform: 'uppercase', flexShrink: 0 }}>{r.source}</span>
+        <span style={{ fontFamily: MONO, fontSize: 10, color: '#7d7566', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 10px 10px', fontFamily: BARLOW, fontSize: 12, color: '#9c9484', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+          {r.text}
+        </div>
+      )}
     </div>
   );
 }

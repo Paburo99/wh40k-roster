@@ -57,6 +57,19 @@ export interface EditionData {
   units: WUnit[];
 }
 
+export interface RuleSection {
+  level: number; // 2 = chapter heading, 3 = sub-section
+  title: string;
+  text: string;
+  src: string; // source document, e.g. 'Core Rules', 'FAQs', 'Abilities'
+}
+
+export interface RulesData {
+  edition: number;
+  builtAt: string;
+  sections: RuleSection[];
+}
+
 export type Edition = 10 | 11;
 
 // ---- App domain ----

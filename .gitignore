@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Secrets (NVIDIA_API_KEY for the AI assistant) — commit .env.example instead
+.env
+
+# Machine-specific Claude Code helpers
+.claude/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
