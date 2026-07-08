@@ -9,8 +9,8 @@ export default defineConfig(({ command, mode }) => {
   const apiKey = env.NVIDIA_API_KEY ?? ''
   return {
     plugins: [react()],
-    // GitHub Pages project site is served from /wh40k-roster/; keep dev server at root.
-    base: command === 'build' ? '/wh40k-roster/' : '/',
+    // Vercel serve from root
+    base: '/',
     server: {
       proxy: {
         // NVIDIA Build API blocks browser CORS; in dev, proxy the AI assistant
