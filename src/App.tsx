@@ -1477,7 +1477,7 @@ function RulesScreen({ rules, error, edition, onEdition, query, setQuery, mode, 
                     <div style={{ fontFamily: BARLOW, fontSize: 12.5, color: '#e0937f', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{m.error}</div>
                   ) : m.a ? (
                     <>
-                      <div style={{ fontFamily: BARLOW, fontSize: 13.5, color: '#cfc7b6', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{m.a}</div>
+                      <Markdown text={m.a} style={{ fontFamily: BARLOW, fontSize: 13.5, color: '#cfc7b6', lineHeight: 1.55 }} />
                       {m.refs && m.refs.length > 0 && (
                         <div style={{ marginTop: 10, borderTop: '1px solid #26211c', paddingTop: 8 }}>
                           <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 1.2, color: '#7d7566', textTransform: 'uppercase', marginBottom: 6 }}>References</div>
@@ -1546,6 +1546,114 @@ function RulesScreen({ rules, error, edition, onEdition, query, setQuery, mode, 
       )}
     </div>
   );
+}
+
+/** Renders inline markdown (**bold**, *italic*, `code`, [text](url)) to React nodes. */
+function inlineMd(text: string, keyBase: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const re = /(\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`|\[(.+?)\]\((\S+?)\))/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let k = 0;
+  while ((m = re.exec(text))) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    const key = `${keyBase}-${k++}`;
+    if (m[2] != null || m[3] != null) {
+      nodes.push(<strong key={key} style={{ color: '#e6dfd0', fontWeight: 700 }}>{m[2] ?? m[3]}</strong>);
+    } else if (m[4] != null || m[5] != null) {
+      nodes.push(<em key={key}>{m[4] ?? m[5]}</em>);
+    } else if (m[6] != null) {
+      nodes.push(<code key={key} style={{ fontFamily: MONO, fontSize: '0.88em', background: '#16130f', border: '1px solid #26211c', borderRadius: 4, padding: '1px 4px', color: '#d8a05f' }}>{m[6]}</code>);
+    } else if (m[7] != null) {
+      nodes.push(<a key={key} href={m[8]} target="_blank" rel="noreferrer" style={{ color: '#d8a05f', textDecoration: 'underline' }}>{m[7]}</a>);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+/** Lightweight markdown renderer for AI answers: headings, lists, code fences, quotes, emphasis. */
+function Markdown({ text, style }: { text: string; style?: CSSProperties }) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const blocks: ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    // Code fence
+    if (/^\s*```/.test(line)) {
+      const body: string[] = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) body.push(lines[i++]);
+      i++; // closing fence
+      blocks.push(
+        <pre key={key++} style={{ margin: '6px 0', fontFamily: MONO, fontSize: 11.5, lineHeight: 1.5, color: '#b3ab9a', background: '#16130f', border: '1px solid #26211c', borderRadius: 8, padding: '8px 10px', overflowX: 'auto', whiteSpace: 'pre' }}>
+          {body.join('\n')}
+        </pre>,
+      );
+      continue;
+    }
+    // Heading
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      const lvl = h[1].length;
+      blocks.push(
+        <div key={key++} style={{ fontFamily: OSWALD, fontWeight: 600, letterSpacing: 0.3, color: '#e6dfd0', fontSize: lvl <= 2 ? 15 : 13.5, margin: '10px 0 4px' }}>
+          {inlineMd(h[2], `h${key}`)}
+        </div>,
+      );
+      i++;
+      continue;
+    }
+    // Blockquote
+    if (/^\s*>\s?/.test(line)) {
+      const body: string[] = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) body.push(lines[i++].replace(/^\s*>\s?/, ''));
+      blocks.push(
+        <div key={key++} style={{ borderLeft: '3px solid #8c352c', paddingLeft: 10, margin: '6px 0', color: '#b3ab9a', fontStyle: 'italic' }}>
+          {inlineMd(body.join('\n'), `q${key}`)}
+        </div>,
+      );
+      continue;
+    }
+    // Lists (unordered or ordered)
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(line);
+      const items: ReactNode[] = [];
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i]) && /^\s*\d+[.)]\s+/.test(lines[i]) === ordered) {
+        const content = lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, '');
+        items.push(<li key={items.length} style={{ marginBottom: 2 }}>{inlineMd(content, `li${key}-${items.length}`)}</li>);
+        i++;
+      }
+      const listStyle: CSSProperties = { margin: '4px 0', paddingLeft: 20 };
+      blocks.push(ordered
+        ? <ol key={key++} style={listStyle}>{items}</ol>
+        : <ul key={key++} style={listStyle}>{items}</ul>);
+      continue;
+    }
+    // Blank line
+    if (line.trim() === '') {
+      i++;
+      continue;
+    }
+    // Paragraph: gather consecutive non-empty, non-block lines
+    const para: string[] = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !/^\s*```/.test(lines[i]) &&
+      !/^(#{1,6})\s+/.test(lines[i]) &&
+      !/^\s*>\s?/.test(lines[i]) &&
+      !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i])
+    ) {
+      para.push(lines[i++]);
+    }
+    blocks.push(
+      <p key={key++} style={{ margin: '0 0 6px' }}>{inlineMd(para.join('\n'), `p${key}`)}</p>,
+    );
+  }
+  return <div style={style}>{blocks}</div>;
 }
 
 /** One cited context chunk under an AI answer; expands to the full source text. */
