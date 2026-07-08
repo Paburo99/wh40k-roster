@@ -1,48 +1,68 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+// Vercel Edge Function proxy for NVIDIA AI API
+// This file is written for the Edge runtime (Request/Response web API).
 
-// NVIDIA Build API endpoint
 const NVIDIA_API_BASE = 'https://integrate.api.nvidia.com/v1';
-
-// Get API key from environment (set NVIDIA_API_KEY in Vercel project settings)
 const API_KEY = process.env.NVIDIA_API_KEY;
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 
   if (!API_KEY) {
-    return res.status(500).json({ error: 'NVIDIA_API_KEY not configured on server' });
+    return new Response(JSON.stringify({ error: 'NVIDIA_API_KEY not configured on server' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 
-  // Extract the path after /api/ai-proxy
-  const path = req.url?.replace('/api/ai-proxy', '') || '/v1/chat/completions';
-
   try {
-    const response = await fetch(`${NVIDIA_API_BASE}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${API_KEY}`,
-        ...(req.headers['anthropic-version'] ? { 'anthropic-version': req.headers['anthropic-version'] as string } : {}),
-      },
-      body: JSON.stringify(req.body),
-    });
+    const url = new URL(req.url);
+    // Preserve any search params when proxying
+    const path = url.pathname.replace('/api/ai-proxy', '') || '/v1/chat/completions';
+    const targetUrl = `${NVIDIA_API_BASE}${path}${url.search}`;
 
-    const data = await response.json();
+    // Read body as text so we can forward it unchanged
+    const body = await req.text();
 
-    // Forward the status code and headers
-    res.status(response.status);
-    if (response.headers.get('content-type')) {
-      res.setHeader('content-type', response.headers.get('content-type')!);
+    const headers = new Headers(req.headers as any);
+    // Ensure JSON content type and set authorization
+    headers.set('content-type', 'application/json');
+    headers.set('authorization', `Bearer ${API_KEY}`);
+
+    if (req.headers.get && req.headers.get('anthropic-version')) {
+      headers.set('anthropic-version', req.headers.get('anthropic-version')!);
     }
 
-    return res.json(data);
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers,
+      body,
+    });
+
+    // Forward response body and status and content-type
+    const responseText = await response.text();
+    const contentType = response.headers.get('content-type') || 'application/json';
+
+    const forwardHeaders: Record<string, string> = {
+      'content-type': contentType,
+    };
+
+    return new Response(responseText, {
+      status: response.status,
+      headers: forwardHeaders,
+    });
   } catch (error) {
     console.error('AI Proxy error:', error);
-    return res.status(500).json({
+    return new Response(JSON.stringify({
       error: 'Proxy error',
       detail: error instanceof Error ? error.message : String(error),
+    }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
     });
   }
 }
