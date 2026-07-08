@@ -3,7 +3,8 @@ import type { CSSProperties, ReactNode } from 'react';
 import { deletePhoto, downscalePhoto, setPhoto, usePhoto } from './photos';
 import { askAi, loadAiSettings, retrieve, saveAiSettings } from './ai';
 import type { AiRef, AiSettings } from './ai';
-import { abilityText, equipWeapon, inches, loadEdition, loadRules, plus, UNIT_TYPES, unitType, wargearGroups, weaponAbilityRule, weaponBaseName, weaponChoices } from './data';
+import { abilityText, equipWeapon, inches, loadEdition, loadRules, modelWeaponGroups, plus, UNIT_TYPES, unitType, wargearGroups, weaponAbilityRule, weaponBaseName, weaponChoices } from './data';
+import type { WargearGroup } from './data';
 import { factionColor, groupFactions } from './factions';
 import { armyTotal, buildExport, loadPlayers, savePlayers, uid } from './roster';
 import type { Army, Edition, EditionData, Player, RulesData, WUnit, WWeapon } from './types';
@@ -873,8 +874,34 @@ function UnitDetail({ u, data, showAdd, weaponSel, onAdd, onClose }: {
             Tap weapons to equip this roster entry · picking a replacement swaps its default automatically
           </div>
         )}
-        <WeaponTable title="Ranged Weapons" weapons={u.weapons.filter((w) => w.type === 'R')} skillHeader="BS" data={data} sel={weaponSel} />
-        <WeaponTable title="Melee Weapons" weapons={u.weapons.filter((w) => w.type === 'M')} skillHeader="WS" data={data} sel={weaponSel} />
+        {(() => {
+          const mGroups = modelWeaponGroups(u);
+          if (!mGroups) {
+            return (
+              <>
+                <WeaponTable title="Ranged Weapons" weapons={u.weapons.filter((w) => w.type === 'R')} skillHeader="BS" data={data} sel={weaponSel} />
+                <WeaponTable title="Melee Weapons" weapons={u.weapons.filter((w) => w.type === 'M')} skillHeader="WS" data={data} sel={weaponSel} />
+              </>
+            );
+          }
+          return mGroups.map((g) => {
+            const has = (w: WWeapon) => g.weapons.includes(weaponBaseName(w.name));
+            const ranged = u.weapons.filter((w) => w.type === 'R' && has(w));
+            const melee = u.weapons.filter((w) => w.type === 'M' && has(w));
+            return (
+              <div key={g.model}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '20px 2px 0', paddingBottom: 5, borderBottom: '1px solid #352e27' }}>
+                  <span style={{ fontFamily: OSWALD, fontSize: 14, fontWeight: 600, letterSpacing: 1, textTransform: 'uppercase', color: '#d8a05f' }}>{g.model}</span>
+                  {g.count && (
+                    <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 0.8, color: '#7d7566', textTransform: 'uppercase' }}>{g.count}</span>
+                  )}
+                </div>
+                {ranged.length > 0 && <WeaponTable title="Ranged Weapons" weapons={ranged} skillHeader="BS" data={data} sel={weaponSel} />}
+                {melee.length > 0 && <WeaponTable title="Melee Weapons" weapons={melee} skillHeader="WS" data={data} sel={weaponSel} />}
+              </div>
+            );
+          });
+        })()}
 
         {u.options.length > 0 && (
           <>
@@ -1075,6 +1102,7 @@ function ArmyDetail(props: {
           const choices = weaponChoices(u);
           const selWeapons = e.weapons ?? [];
           const groups = wargearGroups(u);
+          const modelGroups = modelWeaponGroups(u);
           const groupedNames = new Set(groups.flatMap((g) => g.choices));
           const otherChoices = choices.filter((n) => !groupedNames.has(n));
           const looseOptions = u.options.filter((o) => !groups.some((g) => g.text === o));
@@ -1083,6 +1111,37 @@ function ArmyDetail(props: {
               ...a,
               entries: a.entries.map((x) => (x.id === e.id ? { ...x, weapons: fn(x.weapons ?? []) } : x)),
             }));
+          const renderWargearGroup = (g: WargearGroup, key: string | number) => {
+            const groupSel = g.choices.filter((c) => selWeapons.includes(c));
+            const defaultActive = groupSel.length === 0;
+            return (
+              <div key={key} style={{ background: '#16130f', border: '1px solid #26211c', borderRadius: 10, padding: '10px 10px 8px', marginBottom: 8 }}>
+                <div style={{ fontFamily: BARLOW, fontSize: 11, color: '#7d7566', lineHeight: 1.45, whiteSpace: 'pre-wrap', marginBottom: 8 }}>{g.text}</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {g.choices.map((c, ci) => {
+                    const isDefault = ci === 0;
+                    const active = selWeapons.includes(c) || (isDefault && defaultActive);
+                    return (
+                      <button
+                        key={c}
+                        style={chip(active, { padding: '7px 10px', minHeight: 32, textTransform: 'none', letterSpacing: 0.3 })}
+                        onClick={() => {
+                          if (isDefault && !selWeapons.includes(c)) {
+                            setEntryWeapons((w) => w.filter((n) => !g.choices.includes(n)));
+                          } else {
+                            setEntryWeapons((w) => equipWeapon(u, w, c));
+                          }
+                        }}
+                      >
+                        {c}
+                        {isDefault && <span style={{ color: active ? '#c98577' : '#6b6457', marginLeft: 5, fontSize: 9 }}>DEFAULT</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          };
           return (
             <div key={e.id} style={{ ...card, marginBottom: 8, overflow: 'hidden' }}>
               <button
@@ -1125,37 +1184,21 @@ function ArmyDetail(props: {
                   {(groups.length > 0 || otherChoices.length > 1) && (
                     <>
                       <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1.2, color: '#7d7566', textTransform: 'uppercase', margin: '12px 2px 6px' }}>Weapons</div>
-                      {groups.map((g, gi) => {
-                        const groupSel = g.choices.filter((c) => selWeapons.includes(c));
-                        const defaultActive = groupSel.length === 0;
-                        return (
-                          <div key={gi} style={{ background: '#16130f', border: '1px solid #26211c', borderRadius: 10, padding: '10px 10px 8px', marginBottom: 8 }}>
-                            <div style={{ fontFamily: BARLOW, fontSize: 11, color: '#7d7566', lineHeight: 1.45, whiteSpace: 'pre-wrap', marginBottom: 8 }}>{g.text}</div>
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              {g.choices.map((c, ci) => {
-                                const isDefault = ci === 0;
-                                const active = selWeapons.includes(c) || (isDefault && defaultActive);
-                                return (
-                                  <button
-                                    key={c}
-                                    style={chip(active, { padding: '7px 10px', minHeight: 32, textTransform: 'none', letterSpacing: 0.3 })}
-                                    onClick={() => {
-                                      if (isDefault && !selWeapons.includes(c)) {
-                                        setEntryWeapons((w) => w.filter((n) => !g.choices.includes(n)));
-                                      } else {
-                                        setEntryWeapons((w) => equipWeapon(u, w, c));
-                                      }
-                                    }}
-                                  >
-                                    {c}
-                                    {isDefault && <span style={{ color: active ? '#c98577' : '#6b6457', marginLeft: 5, fontSize: 9 }}>DEFAULT</span>}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
+                      {modelGroups
+                        ? modelGroups
+                            .filter((mg) => mg.wargear.length > 0)
+                            .map((mg) => (
+                              <div key={mg.model}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '4px 2px 6px' }}>
+                                  <span style={{ fontFamily: OSWALD, fontSize: 12, fontWeight: 600, letterSpacing: 0.8, textTransform: 'uppercase', color: '#d8a05f' }}>{mg.model}</span>
+                                  {mg.count && (
+                                    <span style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: 0.6, color: '#7d7566', textTransform: 'uppercase' }}>{mg.count}</span>
+                                  )}
+                                </div>
+                                {mg.wargear.map((g, gi) => renderWargearGroup(g, `${mg.model}-${gi}`))}
+                              </div>
+                            ))
+                        : groups.map((g, gi) => renderWargearGroup(g, gi))}
                       {otherChoices.length > 0 && (
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                           {otherChoices.map((wName) => {
