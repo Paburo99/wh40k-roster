@@ -16,7 +16,9 @@ export interface AiSettings {
 const SETTINGS_KEY = 'ttr-ai-v1';
 
 export const DEFAULT_AI: AiSettings = {
-  endpoint: import.meta.env.DEV ? '/nvapi/v1/chat/completions' : 'http://localhost:8787/v1/chat/completions',
+  endpoint: import.meta.env.DEV
+    ? '/nvapi/v1/chat/completions'
+    : '/api/ai-proxy/v1/chat/completions',
   apiKey: '',
   model: 'minimaxai/minimax-m3',
 };
