@@ -4,11 +4,8 @@
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "(/.*)",
       "destination": "/index.html"
     }
-  ],
-  "env": {
-    "NVIDIA_API_KEY": "@nvidia-api-key"
-  }
+  ]
 }
