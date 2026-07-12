@@ -6,6 +6,7 @@ import type { AiRef, AiSettings } from './ai';
 import { abilityText, equipWeapon, inches, loadEdition, loadRules, modelWeaponGroups, plus, UNIT_TYPES, unitType, wargearGroups, weaponAbilityRule, weaponBaseName, weaponChoices } from './data';
 import type { WargearGroup } from './data';
 import { factionColor, groupFactions } from './factions';
+import { FactionIcon } from './FactionIcon';
 import { armyTotal, buildExport, loadPlayers, savePlayers, uid } from './roster';
 import type { Army, Edition, EditionData, Player, RulesData, WUnit, WWeapon } from './types';
 import { BARLOW, card, chip, MONO, OSWALD, screenBg, sectionTitle, segBtn, stripe } from './ui';
@@ -183,7 +184,10 @@ export default function App() {
             </div>
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search units…" style={searchInput} />
             <button onClick={() => setFactionPicker('filter')} style={factionBtn}>
-              <span>{factionF ?? 'All Factions'}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {factionF && <FactionIcon faction={factionF} size={16} color="#ddd6c8" />}
+                <span>{factionF ?? 'All Factions'}</span>
+              </span>
               <span style={{ color: '#7d7566' }}>▾</span>
             </button>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', overflowX: 'auto', marginTop: 8, paddingBottom: 10 }}>
@@ -410,7 +414,9 @@ export default function App() {
           <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px 40px' }}>
             {factionPicker === 'filter' && (
               <button onClick={() => { setFactionF(null); setFactionPicker(null); }} style={factionRow}>
-                <span style={{ width: 10, height: 10, borderRadius: 3, background: '#55606b', flexShrink: 0 }} />
+                <span style={{ width: 20, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: '#55606b' }} />
+                </span>
                 <span style={{ flex: 1, fontFamily: BARLOW, fontSize: 15, fontWeight: 600, color: '#ddd6c8' }}>All Factions</span>
                 {!factionF && <span style={{ color: '#cf5240', fontSize: 15 }}>✓</span>}
               </button>
@@ -430,7 +436,9 @@ export default function App() {
                       }}
                       style={factionRow}
                     >
-                      <span style={{ width: 10, height: 10, borderRadius: 3, background: factionColor(f), flexShrink: 0 }} />
+                      <span style={{ width: 20, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+                        <FactionIcon faction={f} size={18} color="#ddd6c8" />
+                      </span>
                       <span style={{ flex: 1, fontFamily: BARLOW, fontSize: 15, fontWeight: 600, color: '#ddd6c8' }}>{f}</span>
                       {sel && <span style={{ color: '#cf5240', fontSize: 15 }}>✓</span>}
                     </button>
@@ -663,8 +671,9 @@ function UnitRow({ u, ed, viewCards, onOpen }: { u: WUnit; ed: Edition; viewCard
           <div style={{ fontFamily: OSWALD, fontSize: 15, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase', color: '#e6dfd0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {u.name}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 0.5, color: '#857c6c', marginTop: 3, textTransform: 'uppercase' }}>
-            {u.faction} · {unitType(u)}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 10, letterSpacing: 0.5, color: '#857c6c', marginTop: 3, textTransform: 'uppercase' }}>
+            <FactionIcon faction={u.faction} size={11} color="#857c6c" />
+            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.faction} · {unitType(u)}</span>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 14px', flexShrink: 0 }}>
