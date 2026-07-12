@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="75%">
+      <stop offset="0%" stop-color="#221c17"/>
+      <stop offset="100%" stop-color="#0a0908"/>
+    </radialGradient>
+  </defs>
+  <!-- background -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <!-- shield -->
+  <path d="M256 68 L412 116 V276 C412 366 342 420 256 456 C170 420 100 366 100 276 V116 Z"
+        fill="#1b1815" stroke="#e6dfd0" stroke-width="14" stroke-linejoin="round"/>
+  <!-- inner shield line -->
+  <path d="M256 104 L380 142 V272 C380 344 324 390 256 420 C188 390 132 344 132 272 V142 Z"
+        fill="none" stroke="#3a332b" stroke-width="6" stroke-linejoin="round"/>
+  <!-- sword: blade -->
+  <path d="M256 128 L276 168 V296 H236 V168 Z" fill="#cf5240"/>
+  <!-- sword: crossguard -->
+  <rect x="196" y="296" width="120" height="20" rx="8" fill="#e6dfd0"/>
+  <!-- sword: grip -->
+  <rect x="245" y="316" width="22" height="46" rx="6" fill="#cf5240"/>
+  <!-- sword: pommel -->
+  <circle cx="256" cy="382" r="16" fill="#e6dfd0"/>
+</svg>
