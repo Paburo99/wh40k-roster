@@ -3,12 +3,13 @@ import type { CSSProperties, ReactNode } from 'react';
 import { deletePhoto, downscalePhoto, setPhoto, usePhoto } from './photos';
 import { askAi, loadAiSettings, retrieve, saveAiSettings } from './ai';
 import type { AiRef, AiSettings } from './ai';
-import { abilityText, equipWeapon, inches, loadEdition, loadRules, modelWeaponGroups, plus, UNIT_TYPES, unitType, wargearGroups, weaponAbilityRule, weaponBaseName, weaponChoices } from './data';
-import type { WargearGroup } from './data';
+import { abilityText, applyWargearChoice, equipWeapon, loadEdition, loadRules, plus, UNIT_TYPES, unitType, unitModelGroups } from './data';
 import { factionColor, groupFactions } from './factions';
 import { FactionIcon } from './FactionIcon';
 import { armyTotal, buildExport, loadPlayers, savePlayers, uid } from './roster';
-import type { Army, Edition, EditionData, Player, RulesData, WUnit, WWeapon } from './types';
+import type { Army, Edition, EditionData, Player, RulesData, WUnit } from './types';
+import { UnitLoadoutView } from './UnitLoadout';
+import type { WeaponSel } from './UnitLoadout';
 import { BARLOW, card, chip, MONO, OSWALD, screenBg, sectionTitle, segBtn, stripe } from './ui';
 
 type Modal = 'newPlayer' | 'newArmy' | 'export' | 'aiSettings' | null;
@@ -375,16 +376,17 @@ export default function App() {
         const entry = ref
           ? players.flatMap((p) => p.armies).find((a) => a.id === ref.armyId)?.entries.find((e) => e.id === ref.entryId) ?? null
           : null;
-        const weaponSel = ref && entry
+        const setWeapons = (fn: (weapons: string[]) => string[]) =>
+          ref &&
+          updateArmy(ref.armyId, (a) => ({
+            ...a,
+            entries: a.entries.map((x) => (x.id === ref.entryId ? { ...x, weapons: fn(x.weapons ?? []) } : x)),
+          }));
+        const weaponSel: WeaponSel | undefined = ref && entry
           ? {
               selected: entry.weapons ?? [],
-              onToggle: (name: string) =>
-                updateArmy(ref.armyId, (a) => ({
-                  ...a,
-                  entries: a.entries.map((x) =>
-                    x.id === ref.entryId ? { ...x, weapons: equipWeapon(detail.unit, x.weapons ?? [], name) } : x,
-                  ),
-                })),
+              onToggle: (name) => setWeapons((w) => equipWeapon(detail.unit, w, name)),
+              onApply: (opt, idx) => setWeapons((w) => applyWargearChoice(detail.unit, w, opt, idx)),
             }
           : undefined;
         return (
@@ -702,91 +704,6 @@ function UnitRow({ u, ed, viewCards, onOpen }: { u: WUnit; ed: Edition; viewCard
 
 // ================= unit detail =================
 
-interface WeaponSel {
-  selected: string[];
-  onToggle: (name: string) => void;
-}
-
-function WeaponTable({ title, weapons, skillHeader, data, sel }: { title: string; weapons: WWeapon[]; skillHeader: 'BS' | 'WS'; data: EditionData; sel?: WeaponSel }) {
-  const [openAbil, setOpenAbil] = useState<number | null>(null);
-  const grid = 'minmax(0,1fr) 40px 26px 30px 26px 28px 30px';
-  const head: CSSProperties = { fontFamily: MONO, fontSize: 9, color: '#7d7566', textAlign: 'center' };
-  const cell: CSSProperties = { fontFamily: MONO, fontSize: 11, color: '#c4bba8', textAlign: 'center' };
-  return (
-    <>
-      <div style={sectionTitle}>{title}</div>
-      <div style={{ ...card, padding: '10px 12px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 4, paddingBottom: 6, borderBottom: '1px solid #2b2620' }}>
-          <span style={{ ...head, textAlign: 'left', letterSpacing: 0.5 }}>WEAPON</span>
-          <span style={head}>RNG</span>
-          <span style={head}>A</span>
-          <span style={head}>{skillHeader}</span>
-          <span style={head}>S</span>
-          <span style={head}>AP</span>
-          <span style={head}>D</span>
-        </div>
-        {weapons.length === 0 && (
-          <div style={{ fontFamily: MONO, fontSize: 10, color: '#6f6759', padding: '10px 0 2px', letterSpacing: 0.5, textTransform: 'uppercase' }}>None</div>
-        )}
-        {weapons.map((w, i) => {
-          const base = weaponBaseName(w.name);
-          const isSel = sel ? sel.selected.includes(base) : false;
-          return (
-          <div key={i} style={{ padding: '8px 0 0' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 4, alignItems: 'baseline' }}>
-              {sel ? (
-                <button
-                  onClick={() => sel.onToggle(base)}
-                  style={{
-                    background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: 'pointer',
-                    fontFamily: BARLOW, fontSize: 12.5, fontWeight: 600,
-                    color: isSel ? '#e5a89a' : '#ddd6c8',
-                  }}
-                >
-                  <span style={{ color: isSel ? '#cf5240' : '#6f6759', marginRight: 5 }}>{isSel ? '◆' : '◇'}</span>
-                  {w.name}
-                </button>
-              ) : (
-                <span style={{ fontFamily: BARLOW, fontSize: 12.5, fontWeight: 600, color: '#ddd6c8' }}>{w.name}</span>
-              )}
-              <span style={cell}>{inches(w.range)}</span>
-              <span style={cell}>{w.A}</span>
-              <span style={cell}>{plus(w.skill)}</span>
-              <span style={cell}>{w.S}</span>
-              <span style={cell}>{w.AP}</span>
-              <span style={cell}>{w.D}</span>
-            </div>
-            {w.abils.length > 0 && (
-              <button
-                onClick={() => setOpenAbil(openAbil === i ? null : i)}
-                style={{ background: 'none', border: 'none', padding: '3px 0 0', cursor: 'pointer', textAlign: 'left', fontFamily: MONO, fontSize: 9.5, letterSpacing: 0.3, color: '#a06a3f' }}
-              >
-                [{w.abils.join(', ')}] <span style={{ color: '#6f6759' }}>{openAbil === i ? '▴' : '▾'}</span>
-              </button>
-            )}
-            {openAbil === i && (
-              <div style={{ margin: '6px 0 4px', padding: '10px 12px', background: '#14110f', border: '1px solid #2b2620', borderRadius: 8 }}>
-                {w.abils.map((a) => {
-                  const rule = weaponAbilityRule(data, a);
-                  return (
-                    <div key={a} style={{ padding: '4px 0' }}>
-                      <div style={{ fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: 0.8, color: '#d8a05f', textTransform: 'uppercase' }}>[{a}]</div>
-                      <div style={{ fontFamily: BARLOW, fontSize: 12, color: '#9c9484', lineHeight: 1.45, marginTop: 2, whiteSpace: 'pre-wrap' }}>
-                        {rule ? rule.text : 'Rule text not found in the core rules glossary.'}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          );
-        })}
-      </div>
-    </>
-  );
-}
-
 function UnitDetail({ u, data, showAdd, weaponSel, onAdd, onClose }: {
   u: WUnit;
   data: EditionData;
@@ -799,6 +716,9 @@ function UnitDetail({ u, data, showAdd, weaponSel, onAdd, onClose }: {
   const ed = data.edition as Edition;
   const [photo, refreshPhoto] = usePhoto(ed, u.id);
   const fileRef = useRef<HTMLInputElement>(null);
+  // when model types have their own stat profiles, the statlines render inside
+  // each per-model section instead of the header card
+  const statsPerGroup = unitModelGroups(u)?.[0]?.distinctStats ?? false;
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 30, display: 'flex', flexDirection: 'column', background: screenBg }}>
       <div style={{ padding: '58px 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -860,7 +780,7 @@ function UnitDetail({ u, data, showAdd, weaponSel, onAdd, onClose }: {
                 </div>
               </div>
             </div>
-            {u.models.map((m, mi) => (
+            {!statsPerGroup && u.models.map((m, mi) => (
               <div key={mi}>
                 {u.models.length > 1 && (
                   <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 0.8, color: '#857c6c', textTransform: 'uppercase', margin: '12px 2px 0' }}>{m.name}</div>
@@ -883,48 +803,7 @@ function UnitDetail({ u, data, showAdd, weaponSel, onAdd, onClose }: {
             Tap weapons to equip this roster entry · picking a replacement swaps its default automatically
           </div>
         )}
-        {(() => {
-          const mGroups = modelWeaponGroups(u);
-          if (!mGroups) {
-            return (
-              <>
-                <WeaponTable title="Ranged Weapons" weapons={u.weapons.filter((w) => w.type === 'R')} skillHeader="BS" data={data} sel={weaponSel} />
-                <WeaponTable title="Melee Weapons" weapons={u.weapons.filter((w) => w.type === 'M')} skillHeader="WS" data={data} sel={weaponSel} />
-              </>
-            );
-          }
-          return mGroups.map((g) => {
-            const has = (w: WWeapon) => g.weapons.includes(weaponBaseName(w.name));
-            const ranged = u.weapons.filter((w) => w.type === 'R' && has(w));
-            const melee = u.weapons.filter((w) => w.type === 'M' && has(w));
-            return (
-              <div key={g.model}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '20px 2px 0', paddingBottom: 5, borderBottom: '1px solid #352e27' }}>
-                  <span style={{ fontFamily: OSWALD, fontSize: 14, fontWeight: 600, letterSpacing: 1, textTransform: 'uppercase', color: '#d8a05f' }}>{g.model}</span>
-                  {g.count && (
-                    <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 0.8, color: '#7d7566', textTransform: 'uppercase' }}>{g.count}</span>
-                  )}
-                </div>
-                {ranged.length > 0 && <WeaponTable title="Ranged Weapons" weapons={ranged} skillHeader="BS" data={data} sel={weaponSel} />}
-                {melee.length > 0 && <WeaponTable title="Melee Weapons" weapons={melee} skillHeader="WS" data={data} sel={weaponSel} />}
-              </div>
-            );
-          });
-        })()}
-
-        {u.options.length > 0 && (
-          <>
-            <div style={sectionTitle}>Wargear Options</div>
-            <div style={{ ...card, padding: '4px 14px' }}>
-              {u.options.map((o, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, padding: '10px 0', borderBottom: '1px solid #26211c' }}>
-                  <span style={{ color: '#b5493c', fontSize: 12, lineHeight: 1.5 }}>◆</span>
-                  <span style={{ fontFamily: BARLOW, fontSize: 12.5, color: '#b3ab9a', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{o}</span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
+        <UnitLoadoutView u={u} data={data} sel={weaponSel} mode="datasheet" />
 
         <button
           onClick={() => setAbilitiesOpen(!abilitiesOpen)}
@@ -1108,49 +987,12 @@ function ArmyDetail(props: {
           if (!u) return null;
           const b = u.costs[Math.min(e.sizeIdx, u.costs.length - 1)];
           const expanded = props.expandedEntry === e.id;
-          const choices = weaponChoices(u);
           const selWeapons = e.weapons ?? [];
-          const groups = wargearGroups(u);
-          const modelGroups = modelWeaponGroups(u);
-          const groupedNames = new Set(groups.flatMap((g) => g.choices));
-          const otherChoices = choices.filter((n) => !groupedNames.has(n));
-          const looseOptions = u.options.filter((o) => !groups.some((g) => g.text === o));
           const setEntryWeapons = (fn: (weapons: string[]) => string[]) =>
             props.onUpdate((a) => ({
               ...a,
               entries: a.entries.map((x) => (x.id === e.id ? { ...x, weapons: fn(x.weapons ?? []) } : x)),
             }));
-          const renderWargearGroup = (g: WargearGroup, key: string | number) => {
-            const groupSel = g.choices.filter((c) => selWeapons.includes(c));
-            const defaultActive = groupSel.length === 0;
-            return (
-              <div key={key} style={{ background: '#16130f', border: '1px solid #26211c', borderRadius: 10, padding: '10px 10px 8px', marginBottom: 8 }}>
-                <div style={{ fontFamily: BARLOW, fontSize: 11, color: '#7d7566', lineHeight: 1.45, whiteSpace: 'pre-wrap', marginBottom: 8 }}>{g.text}</div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {g.choices.map((c, ci) => {
-                    const isDefault = ci === 0;
-                    const active = selWeapons.includes(c) || (isDefault && defaultActive);
-                    return (
-                      <button
-                        key={c}
-                        style={chip(active, { padding: '7px 10px', minHeight: 32, textTransform: 'none', letterSpacing: 0.3 })}
-                        onClick={() => {
-                          if (isDefault && !selWeapons.includes(c)) {
-                            setEntryWeapons((w) => w.filter((n) => !g.choices.includes(n)));
-                          } else {
-                            setEntryWeapons((w) => equipWeapon(u, w, c));
-                          }
-                        }}
-                      >
-                        {c}
-                        {isDefault && <span style={{ color: active ? '#c98577' : '#6b6457', marginLeft: 5, fontSize: 9 }}>DEFAULT</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          };
           return (
             <div key={e.id} style={{ ...card, marginBottom: 8, overflow: 'hidden' }}>
               <button
@@ -1190,49 +1032,16 @@ function ArmyDetail(props: {
                     </div>
                   </div>
 
-                  {(groups.length > 0 || otherChoices.length > 1) && (
-                    <>
-                      <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1.2, color: '#7d7566', textTransform: 'uppercase', margin: '12px 2px 6px' }}>Weapons</div>
-                      {modelGroups
-                        ? modelGroups
-                            .filter((mg) => mg.wargear.length > 0)
-                            .map((mg) => (
-                              <div key={mg.model}>
-                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '4px 2px 6px' }}>
-                                  <span style={{ fontFamily: OSWALD, fontSize: 12, fontWeight: 600, letterSpacing: 0.8, textTransform: 'uppercase', color: '#d8a05f' }}>{mg.model}</span>
-                                  {mg.count && (
-                                    <span style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: 0.6, color: '#7d7566', textTransform: 'uppercase' }}>{mg.count}</span>
-                                  )}
-                                </div>
-                                {mg.wargear.map((g, gi) => renderWargearGroup(g, `${mg.model}-${gi}`))}
-                              </div>
-                            ))
-                        : groups.map((g, gi) => renderWargearGroup(g, gi))}
-                      {otherChoices.length > 0 && (
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          {otherChoices.map((wName) => {
-                            const sel = selWeapons.includes(wName);
-                            return (
-                              <button
-                                key={wName}
-                                style={chip(sel, { padding: '7px 10px', minHeight: 32, textTransform: 'none', letterSpacing: 0.3 })}
-                                onClick={() => setEntryWeapons((w) => equipWeapon(u, w, wName))}
-                              >
-                                {wName}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                      {looseOptions.length > 0 && (
-                        <div style={{ fontFamily: BARLOW, fontSize: 11.5, color: '#7d7566', lineHeight: 1.5, marginTop: 8 }}>
-                          {looseOptions.map((o, i) => (
-                            <div key={i} style={{ whiteSpace: 'pre-wrap' }}>◆ {o}</div>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
+                  <UnitLoadoutView
+                    u={u}
+                    data={props.data}
+                    mode="roster"
+                    sel={{
+                      selected: selWeapons,
+                      onToggle: (name) => setEntryWeapons((w) => equipWeapon(u, w, name)),
+                      onApply: (opt, idx) => setEntryWeapons((w) => applyWargearChoice(u, w, opt, idx)),
+                    }}
+                  />
 
                   <textarea
                     value={e.notes}
